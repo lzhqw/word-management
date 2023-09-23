@@ -202,6 +202,29 @@ def save_word_book(tree):
     tree.write("WordBook.xml", encoding='utf-8')
 
 
+def notPhrase(word):
+    for meaning in word:
+        class_ = meaning.attrib["class"]
+        if class_ == 'phrase':
+            return False
+    return True
+
+
+def get_all_word(root, phrase=False):
+    if phrase:
+        with open('words.txt', 'w') as file:
+            for word in root:
+                word_ = word.attrib["word"]
+                file.write(word_ + '\n')
+    else:
+        with open('words.txt', 'w') as file:
+            for word in root:
+                if notPhrase(word):
+                    word_ = word.attrib["word"]
+                    file.write(word_ + '\n')
+
+
+# 暂时未修改
 def convert_xml_to_md(root):
     with open('word.md', mode='w') as f:
         for word in root:

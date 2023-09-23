@@ -15,12 +15,13 @@ def input_from_console():
     assert word_ != "" and class_ != "" and meaning_ != ""
     if class_ == 'p':
         class_ = 'phrase'
-    assert class_ in ['n', 'v', 'adj', 'adv', 'phrase']
+    assert class_ in ['n', 'v', 'adj', 'adv', 'phrase', 'prep']
 
     if example_ == "":
         example_ = None
     return {"word_": word_, "class_": class_, "meaning_": meaning_, "example_": example_,
             "derivative_": derivative_, "synonyms_": synonyms_, "antonym_": antonym_}
+
 
 # 暂时未修改
 def input_from_csv(data, i):
@@ -34,6 +35,7 @@ def input_from_csv(data, i):
         class_ = 'phrase'
     assert class_ in ['n', 'v', 'adj', 'adv', 'phrase']
     return {"word_": word_, "class_": class_, "meaning_": meaning_, "example_": example_}
+
 
 # 暂时未修改
 def create_csv_template():
@@ -49,6 +51,7 @@ if __name__ == '__main__':
     # nltk.download('wordnet')
 
     tree, root = load_word_book()
+    get_all_word(root)
     # convert_xml_to_md(root)
     if input_type == 'console':
         while True:
