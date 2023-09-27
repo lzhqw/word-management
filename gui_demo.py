@@ -1,5 +1,5 @@
 import tkinter as tk
-from sql_func2 import *
+from sql_func import *
 
 
 class Application(tk.Frame):
