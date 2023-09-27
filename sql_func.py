@@ -79,6 +79,26 @@ def multiple_insert_rel(conn, words: (list, tuple), table, col, rel_table, rel_c
                 value=(rel_value, word))
 
 
+def multiple_insert_simmilarWords(conn, words: (list, tuple), value):
+    for word in words:
+        insert_(conn=conn, table_name='words', col_name='word', value=word)
+        cursor = conn.cursor()
+        sql = get_select_sql('relSimilarWords', ('word', 'similarWord'))
+        cursor.execute(sql, (word, value))
+        result1 = cursor.fetchone()
+        sql = get_select_sql('relSimilarWords', ('similarWord', 'word'))
+        cursor.execute(sql, (word, value))
+        result2 = cursor.fetchone()
+
+        if result1 or result2:
+            return value
+        else:
+            sql = get_insert_sql('relSimilarWords', ('word', 'similarWord'))
+            cursor.execute(sql, (word, value))
+            conn.commit()
+            return value
+
+
 def insert(conn, word, pos, meaning, example, derivative, synonyms, antonym, similarWords):
     insert_(conn=conn, table_name='words', col_name='word', value=word)
     insert_(conn=conn, table_name='pos', col_name='POS', value=pos)
@@ -123,13 +143,9 @@ def insert(conn, word, pos, meaning, example, derivative, synonyms, antonym, sim
                         rel_col=('relWordMeaningId', 'antonym'),
                         rel_value=wordMeaningId)
     # step9. 关联形近词表
-    multiple_insert_rel(conn=conn,
-                        words=similarWords,
-                        table='words',
-                        col='word',
-                        rel_table='relSimilarWords',
-                        rel_col=('word', 'similarWord'),
-                        rel_value=word)
+    multiple_insert_simmilarWords(conn=conn,
+                                  words=similarWords,
+                                  value=word)
 
 
 def get_words(conn, table, col, select_col, value):
@@ -260,6 +276,25 @@ def update_word(conn, word, new_word):
     conn.commit()
 
 
+def update_meaning(conn, meaning, new_meaning):
+    cursor = conn.cursor()
+    # step1. 在words表中新增words
+    sql = "SELECT * FROM meanings WHERE meaning = %s"
+    cursor.execute(sql, new_meaning)
+    result = cursor.fetchone()
+    if not result:
+        sql = "INSERT INTO meanings(meaning) VALUES (%s)"
+        cursor.execute(sql, new_meaning)
+        conn.commit()
+    for table, col in [('relWordMeaning', 'meaning')]:
+        sql = f"UPDATE {table} SET {col} = %s WHERE {col} = %s"
+        cursor.execute(sql, (new_meaning, meaning))
+    conn.commit()
+    sql = "DELETE FROM meanings WHERE meaning = %s"
+    cursor.execute(sql, meaning)
+    conn.commit()
+
+
 def input_from_console(conn, mode='insert'):
     word = input("word: ")
     word_dict_list = show_word(conn=conn, word=word)
@@ -275,30 +310,10 @@ def get_word_book(conn):
         for word in results:
             f.write(word[0] + '\n')
 
-
-conn = connect()
-get_word_book(conn)
-# input_from_console(conn)
-# initialize_database(conn=conn)
-# insert(conn=conn,
-#        word='test',
-#        pos='v',
-#        meaning='测试1',
-#        example=['this is a test', 'this is the test'],
-#        derivative=['testa', 'testb'],
-#        synonyms=['test sy'],
-#        antonym=['un test'],
-#        similarWords=['ttest']
-#        )
-# insert(conn=conn,
-#        word='test',
-#        pos='n',
-#        meaning='测试2',
-#        example=['this is a test2', 'this is the test2'],
-#        derivative=['testa2', 'testb2'],
-#        synonyms=['test sy2'],
-#        antonym=['un test2'],
-#        similarWords=['ttest2', 'test3']
-#        )
-#
-# show_word(conn, 'test')
+# conn = connect()
+# # get_word_book(conn)
+# word_list = show_word(conn=conn,word='taciturn')
+# old_meaning = word_list[0]['meaning']
+# new_meaning = '沉默寡言的'
+# update_meaning(conn,old_meaning,new_meaning)
+# show_word(conn=conn,word='taciturn')
