@@ -15,7 +15,7 @@ def input_from_console():
     assert word_ != "" and class_ != "" and meaning_ != ""
     if class_ == 'p':
         class_ = 'phrase'
-    assert class_ in ['n', 'v', 'adj', 'adv', 'phrase', 'prep']
+    assert class_ in ['n', 'v', 'adj', 'adv', 'phrase', 'prep','conj']
 
     if example_ == "":
         example_ = None
@@ -33,7 +33,7 @@ def input_from_csv(data, i):
         example_ = None
     if class_ == 'p':
         class_ = 'phrase'
-    assert class_ in ['n', 'v', 'adj', 'adv', 'phrase']
+    assert class_ in ['n', 'v', 'adj', 'adv', 'phrase', 'conj']
     return {"word_": word_, "class_": class_, "meaning_": meaning_, "example_": example_}
 
 

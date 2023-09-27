@@ -1,12 +1,13 @@
 from xml_func import load_word_book
 from xml_func import show_word as show_word_xml
-from sql_func import *
+# from sql_func import *
+from sql_func2 import *
 
 tree, root = load_word_book()
 conn = connect()
 initialize_database(conn)
 
-for word in root:
+for i, word in enumerate(root):
     word_ = word.attrib["word"]
     for num, meaning in enumerate(word):
         pos = meaning.attrib["class"]
@@ -27,6 +28,6 @@ for word in root:
         for example in meaning:
             if example.tag == "example":
                 examples.append(example.text)
-        print(word_, pos, meaning_, derivatives, synonyms, antonyms, examples)
+        print(i, word_, pos, meaning_, derivatives, synonyms, antonyms, examples)
         similarWords = []
         insert(conn, word_, pos, meaning_, examples, derivatives, synonyms, antonyms, similarWords)
