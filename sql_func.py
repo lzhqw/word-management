@@ -1,3 +1,5 @@
+import random
+from datetime import datetime
 import pymysql
 from pymysql.err import IntegrityError
 
@@ -91,12 +93,11 @@ def multiple_insert_simmilarWords(conn, words: (list, tuple), value):
         result2 = cursor.fetchone()
 
         if result1 or result2:
-            return value
+            pass
         else:
             sql = get_insert_sql('relSimilarWords', ('word', 'similarWord'))
             cursor.execute(sql, (word, value))
             conn.commit()
-            return value
 
 
 def insert(conn, word, pos, meaning, example, derivative, synonyms, antonym, similarWords):
@@ -276,23 +277,30 @@ def update_word(conn, word, new_word):
     conn.commit()
 
 
-def update_meaning(conn, meaning, new_meaning):
+def update_meaning(conn, word, meaning, new_meaning):
+    if meaning == new_meaning:
+        return
     cursor = conn.cursor()
     # step1. 在words表中新增words
     sql = "SELECT * FROM meanings WHERE meaning = %s"
     cursor.execute(sql, new_meaning)
-    result = cursor.fetchone()
+    result = cursor.fetchall()
     if not result:
         sql = "INSERT INTO meanings(meaning) VALUES (%s)"
         cursor.execute(sql, new_meaning)
         conn.commit()
-    for table, col in [('relWordMeaning', 'meaning')]:
-        sql = f"UPDATE {table} SET {col} = %s WHERE {col} = %s"
-        cursor.execute(sql, (new_meaning, meaning))
+
+    sql = f"UPDATE relWordMeaning SET meaning = %s WHERE word=%s and meaning = %s"
+    cursor.execute(sql, (new_meaning, word, meaning))
     conn.commit()
-    sql = "DELETE FROM meanings WHERE meaning = %s"
+    # 考虑到一个意思可能多用，因此如果有多个词使用同一个意思的时候，仅更改当前意思
+    sql = "SELECT * FROM relWordMeaning WHERE meaning = %s"
     cursor.execute(sql, meaning)
-    conn.commit()
+    result = cursor.fetchall()
+    if len(result) == 0:
+        sql = "DELETE FROM meanings WHERE meaning = %s"
+        cursor.execute(sql, meaning)
+        conn.commit()
 
 
 def input_from_console(conn, mode='insert'):
@@ -306,10 +314,70 @@ def get_word_book(conn):
     cursor = conn.cursor()
     cursor.execute(sql)
     results = cursor.fetchall()
+    results = [item[0] for item in results]
+    random.shuffle(results)
+
     with open('words.txt', 'w') as f:
         for word in results:
-            f.write(word[0] + '\n')
+            f.write(word + '\n')
+    return results
 
+
+def review_remember(conn, word):
+    # 验证一下word是否存在
+    cursor = conn.cursor()
+    sql = "SELECT word FROM words WHERE word = %s"
+    cursor.execute(sql, word)
+    result = cursor.fetchone()
+    if result:
+        # 先获取一下remember times
+        sql = "SELECT review_times FROM words WHERE word = %s"
+        cursor.execute(sql, word)
+        review_times = cursor.fetchone()[0]
+        review_times = review_times + 1 if review_times else 1
+        today = datetime.now().strftime('%Y-%m-%d')
+        sql = "UPDATE words SET last_review_date=%s,review_times=%s WHERE word=%s "
+        cursor.execute(sql, (today, review_times, word))
+        conn.commit()
+    else:
+        raise Exception("单词不存在")
+
+
+def review_forget(conn, word):
+    # 验证一下word是否存在
+    cursor = conn.cursor()
+    sql = "SELECT word FROM words WHERE word = %s"
+    cursor.execute(sql, word)
+    result = cursor.fetchone()
+    if result:
+        # 先获取一下foget times
+        sql = "SELECT forget_times FROM words WHERE word = %s"
+        cursor.execute(sql, word)
+        forget_times = cursor.fetchone()[0]
+        forget_times = forget_times + 1 if forget_times else 1
+        sql = "UPDATE words SET review_times=%s,forget_times=%s WHERE word=%s"
+        cursor.execute(sql, (0, forget_times, word))
+        conn.commit()
+    else:
+        raise Exception("单词不存在")
+
+
+def get_review_word_list(conn, all=True):
+    cursor = conn.cursor()
+    if all:
+        sql = "SELECT DISTINCT word FROM relWordMeaning"
+        cursor.execute(sql)
+    else:
+        sql = ("SELECT DISTINCT words.word"
+               " FROM relWordMeaning, words "
+               "WHERE relWordMeaning.word = words.word "
+               "AND (last_review_date != %s OR last_review_date IS NULL)")
+        today = datetime.now().strftime('%Y-%m-%d')
+        cursor.execute(sql, today)
+    results = cursor.fetchall()
+    results = [item[0] for item in results]
+    random.shuffle(results)
+    return results
 # conn = connect()
 # # get_word_book(conn)
 # word_list = show_word(conn=conn,word='taciturn')
