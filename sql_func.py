@@ -1,6 +1,8 @@
 import random
-from datetime import datetime
+from datetime import datetime, timedelta
 import pymysql
+import pandas as pd
+import numpy as np
 from pymysql.err import IntegrityError
 
 
@@ -165,17 +167,22 @@ def get_meaning_result(conn, word):
     return results
 
 
-def show_word(conn, word):
+def show_word(conn, word, file_path=None):
     word_dict_list = []
+    output_list = []
 
-    print('-' * 70)
-    print(word)
-    print('-' * 70)
-    # step2. 从relWordMeaning表中查到relWordMeaningId,meaningId和POSId（可能有多个结果）
+    def print_and_save(s):
+        print(s)
+        if file_path:
+            output_list.append(s)
+
+    print_and_save('-' * 70)
+    print_and_save(word)
+    print_and_save('-' * 70)
+
     results = get_meaning_result(conn, word)
     for i, result in enumerate(results):
         relWordMeaningId, meaning, pos = result
-        # step5. 根据relWordMeaningId从relExample表中查到exampleId
         example = get_words(conn=conn,
                             table='relExample',
                             col='example',
@@ -186,37 +193,36 @@ def show_word(conn, word):
                                col='derivative',
                                select_col='relWordMeaningId',
                                value=relWordMeaningId)
-
         synonyms = get_words(conn=conn,
                              table='relSynonyms',
                              col='synonyms',
                              select_col='relWordMeaningId',
                              value=relWordMeaningId)
-
         antonym = get_words(conn=conn,
                             table='relAntonym',
                             col='antonym',
                             select_col='relWordMeaningId',
                             value=relWordMeaningId)
 
-        print(f'  {i + 1}. {pos}.{meaning}')
+        print_and_save(f'  {i + 1}. {pos}.{meaning}')
         if len(example) != 0:
-            print('    --example')
+            print_and_save('    --example')
         for w in example:
-            print(f'        {w[0]}')
+            print_and_save(f'        {w[0]}')
         if len(derivative) != 0:
-            print('    --derivative')
+            print_and_save('    --derivative')
         for w in derivative:
-            print(f'        {w[0]}')
+            print_and_save(f'        {w[0]}')
         if len(synonyms) != 0:
-            print('    --synonyms')
+            print_and_save('    --synonyms')
         for w in synonyms:
-            print(f'        {w[0]}')
+            print_and_save(f'        {w[0]}')
         if len(antonym) != 0:
-            print('    --antonym')
+            print_and_save('    --antonym')
         for w in antonym:
-            print(f'        {w[0]}')
-        print('-' * 70)
+            print_and_save(f'        {w[0]}')
+        print_and_save('-' * 70)
+
         word_dict_list.append({'word': word,
                                'pos': pos,
                                'meaning': meaning,
@@ -235,12 +241,17 @@ def show_word(conn, word):
                               col='word',
                               select_col='similarWord',
                               value=word)
-
     if len(similarWords1 + similarWords2) != 0:
-        print('    --similar words')
+        print_and_save('    --similar words')
     for w in similarWords1 + similarWords2:
-        print(f'        {w[0]}')
+        print_and_save(f'        {w[0]}')
+
     word_dict_list.append(similarWords1 + similarWords2)
+
+    if file_path:
+        with open(file_path, 'a') as f:
+            f.write('\n'.join(output_list))
+
     return word_dict_list
 
 
@@ -309,8 +320,8 @@ def input_from_console(conn, mode='insert'):
     print(word_dict_list)
 
 
-def get_word_book(conn):
-    sql = "SELECT DISTINCT word FROM relWordMeaning WHERE pos != 'phrase'"
+def get_word_book(conn, sql="SELECT DISTINCT word FROM relWordMeaning WHERE pos != 'phrase'"):
+    # sql = "SELECT DISTINCT word FROM relWordMeaning WHERE pos != 'phrase'"
     cursor = conn.cursor()
     cursor.execute(sql)
     results = cursor.fetchall()
@@ -330,14 +341,22 @@ def review_remember(conn, word):
     cursor.execute(sql, word)
     result = cursor.fetchone()
     if result:
-        # 先获取一下remember times
+        # 先获取一下review times
         sql = "SELECT review_times FROM words WHERE word = %s"
         cursor.execute(sql, word)
         review_times = cursor.fetchone()[0]
         review_times = review_times + 1 if review_times else 1
-        today = datetime.now().strftime('%Y-%m-%d')
-        sql = "UPDATE words SET last_review_date=%s,review_times=%s WHERE word=%s "
-        cursor.execute(sql, (today, review_times, word))
+        # 获取一下当前日期
+        today = get_date()
+        # today = '2023-10-11'
+        # 获取一下连续记住了多少次
+        sql = "SELECT continuous_remember_count FROM words WHERE word = %s"
+        cursor.execute(sql, word)
+        continuous_remember_count = cursor.fetchone()[0]
+        continuous_remember_count = continuous_remember_count + 1 if continuous_remember_count else 1
+
+        sql = "UPDATE words SET last_review_date=%s,review_times=%s,continuous_remember_count=%s WHERE word=%s "
+        cursor.execute(sql, (today, review_times, continuous_remember_count, word))
         conn.commit()
     else:
         raise Exception("单词不存在")
@@ -350,38 +369,135 @@ def review_forget(conn, word):
     cursor.execute(sql, word)
     result = cursor.fetchone()
     if result:
-        # 先获取一下foget times
+        # 先获取一下review times
+        sql = "SELECT review_times FROM words WHERE word = %s"
+        cursor.execute(sql, word)
+        review_times = cursor.fetchone()[0]
+        review_times = review_times + 1 if review_times else 1
+        # 再获取一下forget times
         sql = "SELECT forget_times FROM words WHERE word = %s"
         cursor.execute(sql, word)
         forget_times = cursor.fetchone()[0]
         forget_times = forget_times + 1 if forget_times else 1
-        sql = "UPDATE words SET review_times=%s,forget_times=%s WHERE word=%s"
-        cursor.execute(sql, (0, forget_times, word))
+        # 获取一下当前日期
+        today = get_date()
+        # today = '2023-10-11'
+        sql = "UPDATE words SET last_review_date=%s,review_times=%s,continuous_remember_count=%s,forget_times=%s WHERE word=%s"
+        cursor.execute(sql, (today, review_times, 0, forget_times, word))
         conn.commit()
     else:
         raise Exception("单词不存在")
 
 
-def get_review_word_list(conn, all=True):
+def get_review_word_list(conn, type='all'):
     cursor = conn.cursor()
-    if all:
+    today = get_date()
+    if type == 'all':
         sql = "SELECT DISTINCT word FROM relWordMeaning"
         cursor.execute(sql)
+        results = cursor.fetchall()
+        results = [item[0] for item in results]
+        random.shuffle(results)
+    elif type == 'oderByForgetRate':
+        sql = ("SELECT DISTINCT words.word,words.review_times, "
+               "CASE "
+               "WHEN COALESCE(review_times, 0) = 0 THEN 1 "
+               "ELSE CAST(forget_times AS FLOAT) / review_times "
+               "END AS forget_rate "
+               "FROM relWordMeaning "
+               "JOIN words ON relWordMeaning.word = words.word "
+               "WHERE last_review_date IS NULL "
+               "OR last_review_date != %s "
+               "ORDER BY forget_rate DESC, review_times ASC;")
+        cursor.execute(sql, today)
+        results = cursor.fetchall()
+        df = pd.DataFrame(results, columns=['word', 'review_times', 'forget_rate'])
+        df['forget_rate'] = df['forget_rate'].fillna(0)
+        df['review_times'] = df['review_times'].fillna(0)
+        np.random.seed(0)
+
+        # 对每个 forget_rate 层级随机打乱单词
+        shuffled_df = df.sample(frac=1).reset_index(drop=True)
+
+        # 将打乱的数据合并回一个 DataFrame
+        sorted_df = shuffled_df.sort_values(by=['forget_rate', 'review_times'], ascending=[False, True]).reset_index(
+            drop=True)
+        sorted_df.to_csv('./log/temp.csv')
+        sorted_df = list(sorted_df.itertuples(index=False, name=None))
+        results = [item[0] for item in sorted_df]
+        print(results)
+
     else:
+        today = '2023-10-07'
         sql = ("SELECT DISTINCT words.word"
                " FROM relWordMeaning, words "
                "WHERE relWordMeaning.word = words.word "
                "AND (last_review_date != %s OR last_review_date IS NULL)")
-        today = datetime.now().strftime('%Y-%m-%d')
         cursor.execute(sql, today)
+        results = cursor.fetchall()
+        results = [item[0] for item in results]
+        random.shuffle(results)
+
+    return results
+
+
+def get_today_forget_word_list(conn):
+    today = get_date()
+    sql = 'SELECT word FROM words WHERE last_review_date=%s AND continuous_remember_count=0'
+    cursor = conn.cursor()
+    cursor.execute(sql, today)
     results = cursor.fetchall()
     results = [item[0] for item in results]
-    random.shuffle(results)
-    return results
-# conn = connect()
-# # get_word_book(conn)
-# word_list = show_word(conn=conn,word='taciturn')
-# old_meaning = word_list[0]['meaning']
-# new_meaning = '沉默寡言的'
-# update_meaning(conn,old_meaning,new_meaning)
-# show_word(conn=conn,word='taciturn')
+
+    # 获取已经写入文件的单词
+    file_path = f'./log/{today}.txt'
+    existing_words = set()
+    try:
+        with open(file_path, 'r') as f:
+            existing_words = set(f.read().splitlines())
+    except FileNotFoundError:
+        pass  # 文件不存在，可以忽略
+
+    # 过滤掉已经存在于文件中的单词
+    words_to_write = [word for word in results if word not in existing_words]
+
+    # 将新单词写入文件
+    with open(file_path, 'a') as f:
+        for word in words_to_write:
+            f.write(word + '\n')
+
+    return words_to_write
+
+
+def load_word_book():
+    with open('words.txt') as f:
+        word_list = f.readlines()
+        word_list = [w.replace('\n', '') for w in word_list]
+    return word_list
+
+
+def delete_meaning(conn, word, meaning):
+    cursor = conn.cursor()
+
+    sql = 'DELETE FROM relWordMeaning WHERE word=%s AND meaning=%s'
+    cursor.execute(sql, (word, meaning))
+    sql = 'DELETE FROM meanings WHERE meaning=%s'
+    cursor.execute(sql, meaning)
+    conn.commit()
+
+
+def clear_review_data(conn):
+    sql = 'UPDATE words SET last_review_date=NULL, review_times=NULL, forget_times=NULL'
+    cursor = conn.cursor()
+    cursor.execute(sql)
+    conn.commit()
+
+
+def get_date():
+    now = datetime.now()
+    hour = now.hour
+    if 0 <= hour < 6:
+        date = now - timedelta(days=1)
+    else:
+        date = now
+    return date.strftime('%Y-%m-%d')

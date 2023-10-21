@@ -3,16 +3,23 @@ import tkinter as tk
 from sql_func import *
 import tkinter.font as tkFont
 from tkinter import Menu
+from pronunciation import pronounce_word, quit_prononciation
 
 
 class Application(tk.Frame):
     def __init__(self, master=None):
         super().__init__(master)
+        self.connect()
         self.master = master
+        self.master.protocol("WM_DELETE_WINDOW", self.quit_)
         self.pack()
         self.component = []
         self.create_menu()
         self.createWidget()
+        self.first = True
+
+    def connect(self):
+        self.conn = connect()
 
     def create_menu(self):
         """
@@ -34,13 +41,21 @@ class Application(tk.Frame):
             :return:
             """
             self.cnt = 0
-            self.word_list = get_review_word_list(conn=conn, all=True)
+            self.word_list = get_review_word_list(conn=self.conn, type='all')
             self.clear_frame()
             self.createreviewWidget(word=self.word_list[self.cnt], detail=False)
 
         def review_forget():
             self.cnt = 0
-            self.word_list = get_review_word_list(conn=conn, all=False)
+            self.word_list = load_word_book()[200:250]
+            random.shuffle(self.word_list)
+            print(len(self.word_list))
+            self.clear_frame()
+            self.createreviewWidget(word=self.word_list[self.cnt], detail=False)
+
+        def review_order_by_forget_rate():
+            self.cnt = 0
+            self.word_list = get_review_word_list(conn=self.conn, type='oderByForgetRate')
             print(len(self.word_list))
             self.clear_frame()
             self.createreviewWidget(word=self.word_list[self.cnt], detail=False)
@@ -49,11 +64,18 @@ class Application(tk.Frame):
         self.master.config(menu=menu_bar)
         file_menu = Menu(menu_bar, tearoff=0)
         menu_bar.add_cascade(label="File", menu=file_menu)
+        file_menu.add_command(label="Connect", command=self.connect)
         file_menu.add_command(label="Edit", command=edit)
-        file_menu.add_command(label="Review", command=review_all)
+        file_menu.add_command(label="Review", command=self.review)
         file_menu.add_command(label="Review Forget", command=review_forget)
+        file_menu.add_command(label="按照记错比例复习", command=review_order_by_forget_rate)
+        file_menu.add_command(label="导出今日记错单词", command=lambda conn=self.conn: get_today_forget_word_list(conn))
         file_menu.add_separator()
-        file_menu.add_command(label="Exit", command=self.master.quit)
+        file_menu.add_command(label="Exit", command=self.quit_)
+
+    def quit_(self):
+        quit_prononciation()
+        self.master.quit()
 
     def createWidget(self):
         # word
@@ -61,7 +83,7 @@ class Application(tk.Frame):
         self.label_word.grid(row=0, column=0)
         self.word_entry = tk.Entry(self, font=font_en)
         self.word_entry.grid(row=0, column=1, sticky="w")
-        self.word_entry.bind("<Return>", lambda event: self.show_word(conn, self.word_entry.get()))
+        self.word_entry.bind("<Return>", lambda event: self.show_word(self.conn, self.word_entry.get()))
         self.word_entry.bind("<Tab>", self.focus_next_widget_for_word)
 
         # -------------------------------------- #
@@ -104,7 +126,8 @@ class Application(tk.Frame):
         # -------------------------------------- #
         # 按钮：get_word_book
         # -------------------------------------- #
-        self.button_get_word_book = tk.Button(self, text="导出单词", command=lambda conn=conn: get_word_book(conn=conn),
+        self.button_get_word_book = tk.Button(self, text="导出单词",
+                                              command=lambda conn=self.conn: get_word_book(conn=conn),
                                               font=font_cn)
         self.button_get_word_book.grid(row=4, column=2)
 
@@ -195,20 +218,40 @@ class Application(tk.Frame):
         self.similarWords_text.grid(row=num_meaning + 7, column=1, sticky="w")
         self.update()
 
+    def review(self, next=True):
+        if self.first:
+            self.cnt1 = 0
+            self.cnt = 0
+            self.all_word_list = get_review_word_list(conn=self.conn, type='oderByForgetRate')
+            self.word_list = self.all_word_list[self.cnt1:self.cnt1 + 10]
+            self.first = False
+        else:
+            if next:
+                get_today_forget_word_list(self.conn)
+                self.cnt1 += 10
+                self.word_list = self.all_word_list[self.cnt1:self.cnt1 + 10]
+            else:
+                self.cnt1 -= 10
+            self.cnt = 0
+        self.clear_frame()
+        self.createreviewWidget(word=self.word_list[self.cnt], detail=False)
+
     def next(self):
         self.cnt += 1
-        print(self.cnt)
-        self.createreviewWidget(word=self.word_list[self.cnt], detail=False)
+        if self.cnt == len(self.word_list):
+            self.createreviewWidget(word=None, detail=False)
+        else:
+            self.createreviewWidget(word=self.word_list[self.cnt], detail=False)
 
     def createreviewWidget(self, word, detail=False):
         self.clear_frame()
-        self.unbind()
+        # self.unbind()
         if detail:
             self.label_word = tk.Label(self, text="word: ", width=6, height=1, font=font_en)
             self.label_word.grid(row=0, column=0)
             self.word_entry = tk.Entry(self, font=font_en)
             self.word_entry.grid(row=0, column=1, sticky="w")
-            # self.word_entry.bind("<Return>", lambda event: self.show_word(conn, self.word_entry.get()))
+            # self.word_entry.bind("<Return>", lambda event: self.show_word(self.conn, self.word_entry.get()))
             # self.word_entry.bind("<Tab>", self.focus_next_widget_for_word)
 
             # -------------------------------------- #
@@ -236,26 +279,35 @@ class Application(tk.Frame):
             self.focus_set()
             self.bind("<Return>", lambda event: self.forgot())
             self.bind("<space>", lambda event: self.remember())
-
-            self.show_word(conn=conn, word=word)
+            print(self.cnt, len(self.word_list))
+            self.show_word(conn=self.conn, word=word)
+            self.update()
         else:
-            word_label = tk.Label(self, text=word, font=font_en)
-            word_label.pack(pady=20)
-            word_label.bind("<Button-1>", lambda event, word=word: self.createreviewWidget(word, True))
-            self.focus_set()
-            self.bind("<Return>", lambda event, word=word: self.createreviewWidget(word, True))
-            cnt_label = tk.Label(self, text=f'{self.cnt + 1}/{len(self.word_list)}')
-            cnt_label.pack(pady=20)
-        self.update()
+            if self.cnt == len(self.word_list):
+                self.button_next_iter = tk.Button(self, text="下一轮", command=self.review, font=font_cn)
+                self.button_retry = tk.Button(self, text="继续复习当前单词", command=lambda: self.review(False),
+                                              font=font_cn)
+                self.button_next_iter.pack()
+                self.button_retry.pack()
+            else:
+                word_label = tk.Label(self, text=word, font=font_en)
+                word_label.pack(pady=20)
+                word_label.bind("<Button-1>", lambda event, word=word: self.createreviewWidget(word, True))
+                self.focus_set()
+                self.bind("<Return>", lambda event, word=word: self.createreviewWidget(word, True))
+                cnt_label = tk.Label(self, text=f'{self.cnt + 1}/{len(self.word_list)}')
+                cnt_label.pack(pady=20)
+                self.update()
+                pronounce_word(word)
 
     def remember(self):
         word = self.word_entry.get()
-        review_remember(conn=conn, word=word)
+        review_remember(conn=self.conn, word=word)
         self.next()
 
     def forgot(self):
         word = self.word_entry.get()
-        review_forget(conn=conn, word=word)
+        review_forget(conn=self.conn, word=word)
         self.next()
 
     def update_text_height(self, text_box, event):
@@ -294,7 +346,7 @@ class Application(tk.Frame):
             print(antonym)
             print(similarWords)
 
-            insert(conn=conn,
+            insert(conn=self.conn,
                    word=word,
                    pos=pos,
                    meaning=meaning,
@@ -372,12 +424,12 @@ class Application(tk.Frame):
 
     def update_meaning(self):
         word = self.word_entry.get()
-        word_list = show_word(conn=conn, word=word)
+        word_list = show_word(conn=self.conn, word=word)
         for num_meaning in range(len(self.component)):
             old_meaning = word_list[num_meaning]['meaning']
             meaning = self.component[num_meaning]['meaning_entry'].get()
             print(old_meaning, meaning)
-            update_meaning(conn=conn, word=word, meaning=old_meaning, new_meaning=meaning)
+            update_meaning(conn=self.conn, word=word, meaning=old_meaning, new_meaning=meaning)
 
     def focus_next_widget(self, event):
         current_widget = event.widget
@@ -393,7 +445,7 @@ class Application(tk.Frame):
         return "break"
 
     def focus_next_widget_for_word(self, event):
-        self.show_word(conn, self.word_entry.get())
+        self.show_word(self.conn, self.word_entry.get())
         widgets = self.grid_slaves(column=1)
         for widget in widgets:
             info = widget.grid_info()
@@ -405,8 +457,6 @@ class Application(tk.Frame):
 
 
 if __name__ == '__main__':
-    conn = connect()
-
     root = tk.Tk()
     # 设置字体
     font_en = tkFont.Font(family="Californian FB", size=16)
