@@ -19,7 +19,7 @@ class Application(tk.Frame):
         self.first = True
 
     def connect(self):
-        self.conn = connect()
+        self.conn = connect_to_mysql()
 
     def create_menu(self):
         """
@@ -219,16 +219,19 @@ class Application(tk.Frame):
         self.update()
 
     def review(self, next=True):
+        get_today_forget_word_list(self.conn)
         if self.first:
             self.cnt1 = 0
             self.cnt = 0
-            self.all_word_list = get_review_word_list(conn=self.conn, type='oderByForgetRate')
+            self.all_word_list = get_review_word_list(conn=self.conn, type='ForgetAndForgetRate')
             self.word_list = self.all_word_list[self.cnt1:self.cnt1 + 10]
             self.first = False
         else:
             if next:
                 get_today_forget_word_list(self.conn)
                 self.cnt1 += 10
+                # print(self.cnt1)
+                # print(self.word_list)
                 self.word_list = self.all_word_list[self.cnt1:self.cnt1 + 10]
             else:
                 self.cnt1 -= 10
@@ -277,8 +280,9 @@ class Application(tk.Frame):
             self.button_next.grid(row=2, column=2)
             self.unbind("<Return>")
             self.focus_set()
-            self.bind("<Return>", lambda event: self.forgot())
+            self.bind("<Return>", lambda event: self.next())
             self.bind("<space>", lambda event: self.remember())
+            self.bind("<f>", lambda event: self.forgot())
             print(self.cnt, len(self.word_list))
             self.show_word(conn=self.conn, word=word)
             self.update()
@@ -289,6 +293,9 @@ class Application(tk.Frame):
                                               font=font_cn)
                 self.button_next_iter.pack()
                 self.button_retry.pack()
+                already_review_num = get_today_already_review_num(conn=self.conn)
+                already_review_num_label = tk.Label(self, text=str(already_review_num), font=font_en)
+                already_review_num_label.pack()
             else:
                 word_label = tk.Label(self, text=word, font=font_en)
                 word_label.pack(pady=20)

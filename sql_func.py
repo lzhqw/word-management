@@ -4,19 +4,35 @@ import pymysql
 import pandas as pd
 import numpy as np
 from pymysql.err import IntegrityError
+import os
+import json
+from typing import Union, List, Tuple
 
 
-def connect():
-    DBHOST = 'localhost'
-    DBUSER = 'root'
-    DBPASS = '123456'
-    DBNAME = 'dbwords'
-    conn = pymysql.connect(host=DBHOST,
-                           user=DBUSER,
-                           password=DBPASS,
-                           database=DBNAME
-                           )
-    return conn
+def connect_to_mysql():
+    """
+    连接到MySQL数据库
+    :return: 数据库连接对象
+    """
+    with open('db_config.json', 'r') as f:
+        config = json.load(f)
+
+    DBHOST = config['host']
+    DBUSER = config['user']
+    DBPASS = config['password']
+    DBNAME = config['database']
+
+    try:
+        conn = pymysql.connect(
+            host=DBHOST,
+            user=DBUSER,
+            password=DBPASS,
+            database=DBNAME
+        )
+        return conn
+    except pymysql.MySQLError as e:
+        print(f"Error while connecting to MySQL: {e}")
+        return None
 
 
 def initialize_database(conn):
@@ -37,27 +53,43 @@ def initialize_database(conn):
     cursor.close()
 
 
-def get_select_sql(table, col):
+def generate_select_sql(table: str, col: Union[str, List[str], Tuple[str, ...]]) -> str:
+    """
+    生成SELECT SQL查询语句。
+    :param table: 表名
+    :param col: 列名，可以是单个列名的字符串或多个列名组成的列表/元组
+    :return: SQL查询语句
+    """
     if isinstance(col, (list, tuple)):
-        sql = f"SELECT * FROM {table} WHERE " + " =%s AND ".join(col for col in col) + " =%s"
+        columns = " = %s AND ".join(col)
+        sql = f"SELECT * FROM {table} WHERE {columns} = %s;"
     else:
         sql = f"SELECT * FROM {table} WHERE {col} = %s;"
+
     return sql
 
 
-def get_insert_sql(table, col):
+def generate_insert_sql(table: str, col: Union[str, List[str], Tuple[str, ...]]) -> str:
+    """
+    生成INSERT SQL语句。
+    :param table: 表名
+    :param col: 列名，可以是单个列名的字符串或多个列名组成的列表/元组
+    :return: SQL插入语句
+    """
     if isinstance(col, (list, tuple)):
-        sql = (f"INSERT INTO {table} (" + ",".join(i for i in col) +
-               ") VALUES (" + ",".join("%s" for i in col)) + ')'
+        columns = ",".join(col)
+        placeholders = ",".join("%s" for _ in col)
+        sql = f"INSERT INTO {table} ({columns}) VALUES ({placeholders})"
     else:
         sql = f"INSERT INTO {table} ({col}) VALUES (%s)"
+
     return sql
 
 
 def insert_(conn, table_name, col_name, value, lastrowId=False):
     # step1. 查找是否存在
     cursor = conn.cursor()
-    sql = get_select_sql(table_name, col_name)
+    sql = generate_select_sql(table_name, col_name)
     cursor.execute(sql, value)
     result = cursor.fetchone()
     if result:
@@ -66,7 +98,7 @@ def insert_(conn, table_name, col_name, value, lastrowId=False):
         else:
             return value
     else:
-        sql = get_insert_sql(table_name, col_name)
+        sql = generate_insert_sql(table_name, col_name)
         cursor.execute(sql, value)
         conn.commit()
         if lastrowId:
@@ -87,17 +119,17 @@ def multiple_insert_simmilarWords(conn, words: (list, tuple), value):
     for word in words:
         insert_(conn=conn, table_name='words', col_name='word', value=word)
         cursor = conn.cursor()
-        sql = get_select_sql('relSimilarWords', ('word', 'similarWord'))
+        sql = generate_select_sql('relSimilarWords', ('word', 'similarWord'))
         cursor.execute(sql, (word, value))
         result1 = cursor.fetchone()
-        sql = get_select_sql('relSimilarWords', ('similarWord', 'word'))
+        sql = generate_select_sql('relSimilarWords', ('similarWord', 'word'))
         cursor.execute(sql, (word, value))
         result2 = cursor.fetchone()
 
         if result1 or result2:
             pass
         else:
-            sql = get_insert_sql('relSimilarWords', ('word', 'similarWord'))
+            sql = generate_insert_sql('relSimilarWords', ('word', 'similarWord'))
             cursor.execute(sql, (word, value))
             conn.commit()
 
@@ -335,11 +367,13 @@ def get_word_book(conn, sql="SELECT DISTINCT word FROM relWordMeaning WHERE pos 
 
 
 def review_remember(conn, word):
-    # 验证一下word是否存在
     cursor = conn.cursor()
-    sql = "SELECT word FROM words WHERE word = %s"
+    sql = "SELECT word,last_review_date FROM words WHERE word = %s"
     cursor.execute(sql, word)
     result = cursor.fetchone()
+    print(result[1])
+    if result[1] == get_date():
+        return
     if result:
         # 先获取一下review times
         sql = "SELECT review_times FROM words WHERE word = %s"
@@ -364,10 +398,14 @@ def review_remember(conn, word):
 
 def review_forget(conn, word):
     # 验证一下word是否存在
+    # 检测一下是不是第一次复习，只有第一次复习允许写入
     cursor = conn.cursor()
-    sql = "SELECT word FROM words WHERE word = %s"
+    sql = "SELECT word,last_review_date FROM words WHERE word = %s"
     cursor.execute(sql, word)
     result = cursor.fetchone()
+    print(result[1])
+    if result[1] == get_date():
+        return
     if result:
         # 先获取一下review times
         sql = "SELECT review_times FROM words WHERE word = %s"
@@ -387,6 +425,40 @@ def review_forget(conn, word):
         conn.commit()
     else:
         raise Exception("单词不存在")
+
+
+def get_last_forget_words():
+    today = get_date()
+    today = datetime.strptime(today, '%Y-%m-%d').date()
+
+    # 获取log文件夹中的所有文件
+    log_dir = './log/'
+    log_files = os.listdir(log_dir)
+
+    # 初始化一个变量来存储找到的最近日期和对应的文件名
+    latest_date = None
+    latest_file = None
+
+    # 遍历所有文件，找出离当前日期最近但不是当前日期的文件
+    for file in log_files:
+        # 假设文件名是日期，格式为 'YYYY-MM-DD.xxx'
+        try:
+            file_date_str = file.split('.')[0]  # 提取日期部分
+            file_date = datetime.strptime(file_date_str, '%Y-%m-%d').date()  # 转换为日期对象
+        except ValueError:
+            continue  # 如果文件名不是预期格式，则跳过
+
+        if file_date == today:
+            continue  # 如果文件日期是今天，则跳过
+
+        if latest_date is None or file_date > latest_date:
+            latest_date = file_date
+            latest_file = file
+
+    if latest_file:
+        return latest_file
+    else:
+        return None
 
 
 def get_review_word_list(conn, type='all'):
@@ -422,9 +494,65 @@ def get_review_word_list(conn, type='all'):
         # 将打乱的数据合并回一个 DataFrame
         sorted_df = shuffled_df.sort_values(by=['forget_rate', 'review_times'], ascending=[False, True]).reset_index(
             drop=True)
+
         sorted_df.to_csv('./log/temp.csv')
         sorted_df = list(sorted_df.itertuples(index=False, name=None))
         results = [item[0] for item in sorted_df]
+        print(results)
+
+    elif type == "ForgetAndForgetRate":
+        """
+        1.之前复习过的暂时不再复习，只复习前一天中错误的
+        2.仍然是按照错误率来排序
+        """
+        # step1. 读取某一轮开始日期：
+        with open('log/start_date.txt', 'r') as f:
+            start_date = f.readline().strip()
+            print(start_date)
+        # step2. 判断一下这一轮有没有结束
+        sql = "SELECT COUNT(*) FROM words WHERE last_review_date <=%s OR last_review_date IS NULL"
+        cursor.execute(sql, start_date)
+        result = cursor.fetchone()
+        if result[0] == 0:
+            start_date = get_date()
+        sql = ("SELECT DISTINCT words.word,words.review_times, "
+               "CASE "
+               "WHEN COALESCE(review_times, 0) = 0 THEN 1 "
+               "ELSE CAST(forget_times AS FLOAT) / review_times "
+               "END AS forget_rate "
+               "FROM relWordMeaning "
+               "JOIN words ON relWordMeaning.word = words.word "
+               "WHERE last_review_date IS NULL "
+               "OR last_review_date <=%s"
+               "ORDER BY forget_rate DESC, review_times ASC;")
+
+        cursor.execute(sql, start_date)
+        results = cursor.fetchall()
+        df = pd.DataFrame(results, columns=['word', 'review_times', 'forget_rate'])
+        df['forget_rate'] = df['forget_rate'].fillna(0)
+        df['review_times'] = df['review_times'].fillna(0)
+        np.random.seed(0)
+
+        # 对每个 forget_rate 层级随机打乱单词
+        shuffled_df = df.sample(frac=1).reset_index(drop=True)
+
+        # 将打乱的数据合并回一个 DataFrame
+        sorted_df = shuffled_df.sort_values(by=['forget_rate', 'review_times'], ascending=[False, True]).reset_index(
+            drop=True)
+        latest_file = get_last_forget_words()
+        print(f"上一天记错的单词文件：{latest_file}")
+        with open(f'log/{latest_file}', 'r') as f:
+            words_from_file = [line.strip() for line in f.readlines()]
+        df_from_file = pd.DataFrame({
+            'word': words_from_file,
+            'review_times': [0] * len(words_from_file),  # 或者其他默认值
+            'forget_rate': [0] * len(words_from_file)  # 或者其他默认值
+        })
+        print(df_from_file)
+        combined_df = pd.concat([df_from_file, sorted_df], ignore_index=True)
+        print(combined_df)
+        combined_df = list(combined_df.itertuples(index=False, name=None))
+        results = [item[0] for item in combined_df]
         print(results)
 
     else:
@@ -469,6 +597,15 @@ def get_today_forget_word_list(conn):
     return words_to_write
 
 
+def get_today_already_review_num(conn):
+    today = get_date()
+    sql = f"SELECT COUNT(*) FROM words WHERE last_review_date='{today}'"
+    cursor = conn.cursor()
+    cursor.execute(sql)
+    result = cursor.fetchone()[0]
+    return result
+
+
 def load_word_book():
     with open('words.txt') as f:
         word_list = f.readlines()
@@ -501,3 +638,4 @@ def get_date():
     else:
         date = now
     return date.strftime('%Y-%m-%d')
+
