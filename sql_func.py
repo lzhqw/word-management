@@ -6,7 +6,7 @@ import numpy as np
 from pymysql.err import IntegrityError
 import os
 import json
-from typing import Union, List, Tuple
+from typing import Union, List, Tuple, Any
 
 
 def connect_to_mysql():
@@ -86,101 +86,135 @@ def generate_insert_sql(table: str, col: Union[str, List[str], Tuple[str, ...]])
     return sql
 
 
-def insert_(conn, table_name, col_name, value, lastrowId=False):
-    # step1. 查找是否存在
-    cursor = conn.cursor()
-    sql = generate_select_sql(table_name, col_name)
-    cursor.execute(sql, value)
-    result = cursor.fetchone()
-    if result:
-        if lastrowId:
-            return result[0]
-        else:
-            return value
-    else:
-        sql = generate_insert_sql(table_name, col_name)
-        cursor.execute(sql, value)
+def insert_if_not_exists(conn, table_name: str, col_name: str, value: Any, lastrowId: bool = False):
+    """
+       如果数据库中不存在特定值，则插入它。
+       :param conn: 数据库连接
+       :param table_name: 表名
+       :param col_name: 列名
+       :param value: 要插入或查找的值
+       :param lastrowId: 是否返回最后插入行的ID
+       :return: 返回查找或插入的值，如果lastrowId为True，则返回最后插入行的ID
+    """
+    try:
+        with conn.cursor() as cursor:
+            sql = generate_select_sql(table_name, col_name)
+            cursor.execute(sql, value)
+            result = cursor.fetchone()
+            if result:
+                return result[0] if lastrowId else value
+            sql = generate_insert_sql(table_name, col_name)
+            cursor.execute(sql, value)
+            conn.commit()
+            return cursor.lastrowid if lastrowId else value
+    except Exception as e:
+        print(f"Error occurred: {e}")
+        conn.rollback()
+        return None
+
+
+def batch_insert_and_link(conn, items_to_insert: Union[List[str], Tuple[str]], main_table: str, main_col: str,
+                          rel_table: str, rel_cols: Tuple[str, str], rel_value: Union[int, str]):
+    """
+    批量插入单词并建立与给定值的关联。
+    :param conn: 数据库连接
+    :param items_to_insert: 要插入的单词列表
+    :param main_table: 主表名
+    :param main_col: 主表列名
+    :param rel_table: 关联表名
+    :param rel_cols: 关联表列名
+    :param rel_value: 用于建立关联的值
+    """
+    try:
+        for item in items_to_insert:
+            # 插入单词到主表
+            insert_if_not_exists(conn=conn, table_name=main_table, col_name=main_col, value=item)
+
+            # 插入关联信息到关联表
+            insert_if_not_exists(conn=conn, table_name=rel_table, col_name=rel_cols, value=(rel_value, item))
+
+        # 提交事务
         conn.commit()
-        if lastrowId:
-            return cursor.lastrowid
-        else:
-            return value
+    except Exception as e:
+        print(f"Error occurred: {e}")
+        conn.rollback()
 
 
-def multiple_insert_rel(conn, words: (list, tuple), table, col, rel_table, rel_col, rel_value):
-    for word in words:
-        insert_(conn=conn, table_name=table, col_name=col, value=word)
-        insert_(conn=conn, table_name=rel_table,
-                col_name=rel_col,
-                value=(rel_value, word))
+def batch_insert_similar_words(conn, words: list, value: str):
+    """
+    在数据库中插入同义词。
+    :param conn: 数据库连接对象
+    :param words: 需要插入的单词列表
+    :param value: 与单词列表中的单词相似的值
+    :return: None
+    """
+    with conn.cursor() as cursor:
+        for word in words:
+            insert_if_not_exists(conn=conn, table_name='words', col_name='word', value=word)
 
+            select_sql = generate_select_sql('relSimilarWords', ('word', 'similarWord'))
+            cursor.execute(select_sql, (word, value))
+            result_forward = cursor.fetchone()
 
-def multiple_insert_simmilarWords(conn, words: (list, tuple), value):
-    for word in words:
-        insert_(conn=conn, table_name='words', col_name='word', value=word)
-        cursor = conn.cursor()
-        sql = generate_select_sql('relSimilarWords', ('word', 'similarWord'))
-        cursor.execute(sql, (word, value))
-        result1 = cursor.fetchone()
-        sql = generate_select_sql('relSimilarWords', ('similarWord', 'word'))
-        cursor.execute(sql, (word, value))
-        result2 = cursor.fetchone()
+            select_sql = generate_select_sql('relSimilarWords', ('similarWord', 'word'))
+            cursor.execute(select_sql, (word, value))
+            result_reverse = cursor.fetchone()
 
-        if result1 or result2:
-            pass
-        else:
-            sql = generate_insert_sql('relSimilarWords', ('word', 'similarWord'))
-            cursor.execute(sql, (word, value))
+            if result_forward or result_reverse:
+                continue
+
+            insert_sql = generate_insert_sql('relSimilarWords', ('word', 'similarWord'))
+            cursor.execute(insert_sql, (word, value))
             conn.commit()
 
 
 def insert(conn, word, pos, meaning, example, derivative, synonyms, antonym, similarWords):
-    insert_(conn=conn, table_name='words', col_name='word', value=word)
-    insert_(conn=conn, table_name='pos', col_name='POS', value=pos)
-    meaningId = insert_(conn=conn, table_name='meanings', col_name='meaning', value=meaning)
-    wordMeaningId = insert_(conn=conn,
-                            table_name='relWordMeaning',
-                            col_name=('word', 'pos', 'meaning'),
-                            value=(word, pos, meaningId),
-                            lastrowId=True)
+    insert_if_not_exists(conn=conn, table_name='words', col_name='word', value=word)
+    insert_if_not_exists(conn=conn, table_name='pos', col_name='POS', value=pos)
+    meaningId = insert_if_not_exists(conn=conn, table_name='meanings', col_name='meaning', value=meaning)
+    wordMeaningId = insert_if_not_exists(conn=conn,
+                                         table_name='relWordMeaning',
+                                         col_name=('word', 'pos', 'meaning'),
+                                         value=(word, pos, meaningId),
+                                         lastrowId=True)
     # step5. 插入example并关联relExample表
-    multiple_insert_rel(conn=conn,
-                        words=example,
-                        table='examples',
-                        col='example',
-                        rel_table='relExample',
-                        rel_col=('relWordMeaningId', 'example'),
-                        rel_value=wordMeaningId)
+    batch_insert_and_link(conn=conn,
+                          items_to_insert=example,
+                          main_table='examples',
+                          main_col='example',
+                          rel_table='relExample',
+                          rel_cols=('relWordMeaningId', 'example'),
+                          rel_value=wordMeaningId)
 
-    multiple_insert_rel(conn=conn,
-                        words=derivative,
-                        table='words',
-                        col='word',
-                        rel_table='relDerivative',
-                        rel_col=('relWordMeaningId', 'derivative'),
-                        rel_value=wordMeaningId)
+    batch_insert_and_link(conn=conn,
+                          items_to_insert=derivative,
+                          main_table='words',
+                          main_col='word',
+                          rel_table='relDerivative',
+                          rel_cols=('relWordMeaningId', 'derivative'),
+                          rel_value=wordMeaningId)
 
     # step7. 关联同义词表
-    multiple_insert_rel(conn=conn,
-                        words=synonyms,
-                        table='words',
-                        col='word',
-                        rel_table='relSynonyms',
-                        rel_col=('relWordMeaningId', 'synonyms'),
-                        rel_value=wordMeaningId)
+    batch_insert_and_link(conn=conn,
+                          items_to_insert=synonyms,
+                          main_table='words',
+                          main_col='word',
+                          rel_table='relSynonyms',
+                          rel_cols=('relWordMeaningId', 'synonyms'),
+                          rel_value=wordMeaningId)
 
     # step8. 关联反义词表
-    multiple_insert_rel(conn=conn,
-                        words=antonym,
-                        table='words',
-                        col='word',
-                        rel_table='relAntonym',
-                        rel_col=('relWordMeaningId', 'antonym'),
-                        rel_value=wordMeaningId)
+    batch_insert_and_link(conn=conn,
+                          items_to_insert=antonym,
+                          main_table='words',
+                          main_col='word',
+                          rel_table='relAntonym',
+                          rel_cols=('relWordMeaningId', 'antonym'),
+                          rel_value=wordMeaningId)
     # step9. 关联形近词表
-    multiple_insert_simmilarWords(conn=conn,
-                                  words=similarWords,
-                                  value=word)
+    batch_insert_similar_words(conn=conn,
+                               words=similarWords,
+                               value=word)
 
 
 def get_words(conn, table, col, select_col, value):
@@ -372,9 +406,11 @@ def review_remember(conn, word):
     cursor.execute(sql, word)
     result = cursor.fetchone()
     print(result[1])
-    if result[1] == get_date():
+    if str(result[1]) == str(get_date()):
         return
     if result:
+        # 先写入到review_data
+        insert_review_data(conn=conn, word=word, remember=1)
         # 先获取一下review times
         sql = "SELECT review_times FROM words WHERE word = %s"
         cursor.execute(sql, word)
@@ -404,9 +440,11 @@ def review_forget(conn, word):
     cursor.execute(sql, word)
     result = cursor.fetchone()
     print(result[1])
-    if result[1] == get_date():
+    if str(result[1]) == str(get_date()):
         return
     if result:
+        # 先写入到review_data
+        insert_review_data(conn=conn, word=word, remember=0)
         # 先获取一下review times
         sql = "SELECT review_times FROM words WHERE word = %s"
         cursor.execute(sql, word)
@@ -505,6 +543,7 @@ def get_review_word_list(conn, type='all'):
         1.之前复习过的暂时不再复习，只复习前一天中错误的
         2.仍然是按照错误率来排序
         """
+        today = get_date()
         # step1. 读取某一轮开始日期：
         with open('log/start_date.txt', 'r') as f:
             start_date = f.readline().strip()
@@ -543,11 +582,25 @@ def get_review_word_list(conn, type='all'):
         print(f"上一天记错的单词文件：{latest_file}")
         with open(f'log/{latest_file}', 'r') as f:
             words_from_file = [line.strip() for line in f.readlines()]
+
         df_from_file = pd.DataFrame({
-            'word': words_from_file,
-            'review_times': [0] * len(words_from_file),  # 或者其他默认值
-            'forget_rate': [0] * len(words_from_file)  # 或者其他默认值
+            'word': [],
+            'review_times': [],
+            'forget_rate': []
         })
+        # 对每一个单词进行检查
+        for word in words_from_file:
+            cursor.execute("SELECT word, last_review_date FROM words WHERE word=%s", word)
+            data = cursor.fetchone()
+            # 如果该单词今天没有复习
+            if str(data[1]) != str(today):
+                new_row = pd.DataFrame({
+                    'word': [word],
+                    'review_times': [0],
+                    'forget_rate': [0]
+                })
+                df_from_file = pd.concat([df_from_file, new_row], ignore_index=True)
+
         print(df_from_file)
         combined_df = pd.concat([df_from_file, sorted_df], ignore_index=True)
         print(combined_df)
@@ -613,13 +666,18 @@ def load_word_book():
     return word_list
 
 
-def delete_meaning(conn, word, meaning):
+def delete_meaning(conn, meaning, relWordMeaningId):
     cursor = conn.cursor()
 
-    sql = 'DELETE FROM relWordMeaning WHERE word=%s AND meaning=%s'
-    cursor.execute(sql, (word, meaning))
-    sql = 'DELETE FROM meanings WHERE meaning=%s'
+    sql = 'DELETE FROM relWordMeaning WHERE relWordMeaningId = %s'
+    cursor.execute(sql, relWordMeaningId)
+    # 检查一下meaning被多少个单词用了
+    sql = "SELECT COUNT(*) FROM relWordMeaning WHERE meaning = %s"
     cursor.execute(sql, meaning)
+    result = cursor.fetchone()
+    if result[0] == 0:
+        sql = 'DELETE FROM meanings WHERE meaning=%s'
+        cursor.execute(sql, meaning)
     conn.commit()
 
 
@@ -639,3 +697,130 @@ def get_date():
         date = now
     return date.strftime('%Y-%m-%d')
 
+
+def delete_rel_row(conn, table, col, relWordMeaningId):
+    # 先找一下同义词啊之类的
+    cursor = conn.cursor()
+    sql = f"SELECT {col} FROM {table} WHERE relWordMeaningId = %s"
+    cursor.execute(sql, relWordMeaningId)
+    results = cursor.fetchall()
+    print(results)
+    # 删掉所有的含有word的行
+    sql = f"DELETE FROM {table} WHERE relWordMeaningId = %s"
+    cursor.execute(sql, relWordMeaningId)
+    conn.commit()
+    # 如果同义词等没有释义，表明该次仅依赖于word，因此也删掉
+    for row in results:
+        sql = "SELECT COUNT(*) FROM relWordMeaning WHERE word = %s"
+        cursor.execute(sql, row[0])
+        result = cursor.fetchone()
+        print(result)
+        if result[0] == 0:
+            delete_word_with_no_foreign_key(conn, row[0])
+    conn.commit()
+
+
+def delete_rel_example(conn, relWordMeaningId):
+    cursor = conn.cursor()
+    sql = f"SELECT example FROM relExample WHERE relWordMeaningId = %s"
+    cursor.execute(sql, relWordMeaningId)
+    results = cursor.fetchall()
+    # 删掉所有的含有word的行
+    sql = f"DELETE FROM relExample WHERE relWordMeaningId = %s"
+    cursor.execute(sql, relWordMeaningId)
+    conn.commit()
+    # 如果example没在relExample出现，表明该example仅依赖于word，因此也删掉
+    for row in results:
+        sql = "SELECT COUNT(*) FROM relExample WHERE example = %s"
+        cursor.execute(sql, row[0])
+        result = cursor.fetchone()
+        if result[0] == 0:
+            sql = 'DELETE FROM examples WHERE example=%s'
+            cursor.execute(sql, row[0])
+    conn.commit()
+
+
+def delete_word_with_no_foreign_key(conn, word):
+    try:
+        cursor = conn.cursor()
+        sql = "DELETE FROM words WHERE word=%s"
+        cursor.execute(sql, word)
+        conn.commit()
+    except Exception as e:
+        print(f"{word}未删除，原因：{e}")
+
+
+def delete_word(conn, word):
+    """
+    删除word
+    :param conn:
+    :param word:
+    :return:
+    """
+    cursor = conn.cursor()
+    # step1. 在relSimilarWord中删掉有word这一行
+    # 检查similar_word是否在relWordMeaning中，如果不在，也删掉
+    sql = "SELECT word, similarWord FROM relSimilarWords WHERE word = %s OR similarWord = %s"
+    cursor.execute(sql, (word, word))
+    results = cursor.fetchall()
+
+    sql = "DELETE FROM relSimilarWords WHERE word = %s OR similarWord = %s"
+    cursor.execute(sql, (word, word))
+    conn.commit()
+    print(results)
+    for row in results:
+        if word == row[0]:
+            delete_word_with_no_foreign_key(conn, row[1])
+        else:
+            delete_word_with_no_foreign_key(conn, row[0])
+
+    # step2. 在review_data中删掉有word这一行
+    sql = "DELETE FROM review_data WHERE word = %s"
+    cursor.execute(sql, word)
+    conn.commit()
+
+    # step3. 在relWordMeaning中找到id，meaning
+    sql = "SELECT relWordMeaningId, meaning FROM relWordMeaning WHERE word=%s"
+    cursor.execute(sql, word)
+    results = cursor.fetchall()
+    print(results)
+    for row in results:
+        meaning = row[1]
+        relWordMeaningId = row[0]
+        print(relWordMeaningId)
+        # 在 relDerivative relSynonyms relAntonym relExample中按照id检索，删掉对应行
+        # 如果对应行的另一个单词不在relWordMeaning中，则表明该单词完全依赖与被删掉的单词，因此在words中删掉
+        delete_rel_row(conn, "relDerivative", "derivative", relWordMeaningId)
+        delete_rel_row(conn, "relSynonyms", "synonyms", relWordMeaningId)
+        delete_rel_row(conn, "relAntonym", "antonym", relWordMeaningId)
+        delete_rel_example(conn, relWordMeaningId)
+
+        delete_meaning(conn, meaning, relWordMeaningId)
+
+    # 在word中删掉word
+    delete_word_with_no_foreign_key(conn, word)
+
+
+def insert_review_data(conn, word, remember):
+    today = get_date()
+    cursor = conn.cursor()
+    sql = f"SELECT last_review_date,review_times,continuous_remember_count,forget_times FROM words WHERE word = %s"
+    cursor.execute(sql, word)
+    result = cursor.fetchone()
+    # 计算时间差
+    if result[0] is None:
+        review_date_gap = None
+    else:
+        last_review_date = str(result[0])
+        last_review_date = datetime.strptime(last_review_date, '%Y-%m-%d')
+        current_date = get_date()
+        current_date = datetime.strptime(current_date, '%Y-%m-%d')
+        review_date_gap = (current_date - last_review_date).days  # 计算时间差（以天为单位）
+
+    sql = f"INSERT INTO review_data (word,review_date_gap,review_times,continuous_remember_count,forget_times,remember,date) VALUES (%s,%s,%s,%s,%s,%s,%s)"
+    cursor.execute(sql, (word, review_date_gap, result[1], result[2], result[3], remember, today))
+    pass
+
+
+conn = connect_to_mysql()
+delete_word(conn=conn, word="test")

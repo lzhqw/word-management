@@ -230,11 +230,12 @@ class Application(tk.Frame):
             if next:
                 get_today_forget_word_list(self.conn)
                 self.cnt1 += 10
-                # print(self.cnt1)
-                # print(self.word_list)
+                print(self.cnt1)
                 self.word_list = self.all_word_list[self.cnt1:self.cnt1 + 10]
+                print(self.word_list)
             else:
-                self.cnt1 -= 10
+                pass
+
             self.cnt = 0
         self.clear_frame()
         self.createreviewWidget(word=self.word_list[self.cnt], detail=False)
