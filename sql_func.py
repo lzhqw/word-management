@@ -562,7 +562,7 @@ def get_review_word_list(conn, type='all'):
                "FROM relWordMeaning "
                "JOIN words ON relWordMeaning.word = words.word "
                "WHERE last_review_date IS NULL "
-               "OR last_review_date <=%s"
+               "OR last_review_date <%s"
                "ORDER BY forget_rate DESC, review_times ASC;")
 
         cursor.execute(sql, start_date)
@@ -821,6 +821,3 @@ def insert_review_data(conn, word, remember):
     cursor.execute(sql, (word, review_date_gap, result[1], result[2], result[3], remember, today))
     pass
 
-
-conn = connect_to_mysql()
-delete_word(conn=conn, word="test")
