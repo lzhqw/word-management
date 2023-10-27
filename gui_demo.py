@@ -47,8 +47,7 @@ class Application(tk.Frame):
 
         def review_forget():
             self.cnt = 0
-            self.word_list = load_word_book()[200:250]
-            random.shuffle(self.word_list)
+            self.word_list = get_review_word_list(self.conn, type="todayForget")
             print(len(self.word_list))
             self.clear_frame()
             self.createreviewWidget(word=self.word_list[self.cnt], detail=False)
@@ -67,7 +66,7 @@ class Application(tk.Frame):
         file_menu.add_command(label="Connect", command=self.connect)
         file_menu.add_command(label="Edit", command=edit)
         file_menu.add_command(label="Review", command=self.review)
-        file_menu.add_command(label="Review Forget", command=review_forget)
+        file_menu.add_command(label="复习今日记错单词", command=review_forget)
         file_menu.add_command(label="按照记错比例复习", command=review_order_by_forget_rate)
         file_menu.add_command(label="导出今日记错单词", command=lambda conn=self.conn: get_today_forget_word_list(conn))
         file_menu.add_separator()
@@ -471,6 +470,7 @@ if __name__ == '__main__':
     font_cn = tkFont.Font(family="华光小标宋", size=16)
     # 设置title
     root.title("GUI")
+
     # 设置大小及位置
     root.geometry('700x600+500+50')
 

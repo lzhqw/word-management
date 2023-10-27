@@ -9,18 +9,39 @@ import json
 from typing import Union, List, Tuple, Any
 
 
+def read_config(config_path='config.json'):
+    """
+    读取配置文件
+    :param config_path: 配置文件地址
+    :return: 配置文件（json格式）
+    """
+    with open(config_path, 'r') as f:
+        config = json.load(f)
+    return config
+
+
+def update_config(new_config, config_path='config.json'):
+    """
+    更新配置文件
+    :param new_config:
+    :param config_path:
+    :return:
+    """
+    with open(config_path, 'w') as f:
+        json.dump(new_config, f, indent=4)
+
+
 def connect_to_mysql():
     """
     连接到MySQL数据库
     :return: 数据库连接对象
     """
-    with open('db_config.json', 'r') as f:
-        config = json.load(f)
+    config = read_config()
 
-    DBHOST = config['host']
-    DBUSER = config['user']
-    DBPASS = config['password']
-    DBNAME = config['database']
+    DBHOST = config['database']['host']
+    DBUSER = config['database']['user']
+    DBPASS = config['database']['password']
+    DBNAME = config['database']['database']
 
     try:
         conn = pymysql.connect(
@@ -35,22 +56,57 @@ def connect_to_mysql():
         return None
 
 
-def initialize_database(conn):
+# 数据库查询通用函数
+def execute_sql(cursor, sql, params=None, fetch_all=True):
     """
-    表1：
+    执行SQL查询并返回查询结果。
+
+    参数:
+    cursor (object): 数据库游标对象。
+    sql (str): 要执行的SQL查询字符串。
+    params (tuple, optional): SQL查询中的参数，用于防止SQL注入。
+
+    返回:
+    list: 返回查询结果，通常是一个包含多个元组的列表。
+
+    示例:
+    execute_sql(cursor, "SELECT * FROM table WHERE column = %s", ("value",))
     """
-    with open("dbwords - 副本.sql") as file:
+    if params:
+        cursor.execute(sql, params)
+    else:
+        cursor.execute(sql)
+    if fetch_all:
+        return cursor.fetchall()
+    return cursor.fetchone()
+
+
+def read_sql_file():
+    """
+    读取sql文件并拆分成单独的语句sql语句
+    :return:
+    """
+    config = read_config()
+    sql_file = config['sql_file']
+    with open(sql_file, 'r') as file:
         raw_sql = file.readlines()
         raw_sql = "".join(sql for sql in raw_sql)
-    print(raw_sql)
     sql_statements = [statement.strip() for statement in raw_sql.strip().split(';') if statement.strip()]
-    print(sql_statements)
-    cursor = conn.cursor()
-    for sql_statement in sql_statements:
-        print(sql_statement)
-        cursor.execute(sql_statement)
-    conn.commit()
-    cursor.close()
+    return sql_statements
+
+
+def initialize_database(conn):
+    """
+    从初始化MySql数据库
+    :param conn:
+    :return:
+    """
+    sql_statements = read_sql_file()
+    with conn.cursor() as cursor:
+        for sql_statement in sql_statements:
+            print(sql_statement)
+            cursor.execute(sql_statement)
+        conn.commit()
 
 
 def generate_select_sql(table: str, col: Union[str, List[str], Tuple[str, ...]]) -> str:
@@ -86,7 +142,8 @@ def generate_insert_sql(table: str, col: Union[str, List[str], Tuple[str, ...]])
     return sql
 
 
-def insert_if_not_exists(conn, table_name: str, col_name: str, value: Any, lastrowId: bool = False):
+def insert_if_not_exists(conn, table_name: str, col_name: Union[str, List[str], Tuple[str, ...]], value: Any,
+                         lastrowId: bool = False):
     """
        如果数据库中不存在特定值，则插入它。
        :param conn: 数据库连接
@@ -499,127 +556,167 @@ def get_last_forget_words():
         return None
 
 
+def get_review_word_list_all(cursor):
+    sql = "SELECT DISTINCT word FROM relWordMeaning"
+    results = execute_sql(cursor, sql)
+    results = [item[0] for item in results]
+    random.shuffle(results)
+    return results
+
+
+def convert_review_word_results_to_DataFrame(results):
+    df = pd.DataFrame(results, columns=['word', 'review_times', 'forget_rate'])
+    df['forget_rate'] = df['forget_rate'].fillna(0)
+    df['review_times'] = df['review_times'].fillna(0)
+    return df
+
+
+def random_shuffle(df):
+    np.random.seed(0)
+
+    # 对每个 forget_rate 层级随机打乱单词
+    shuffled_df = df.sample(frac=1).reset_index(drop=True)
+
+    # 将打乱的数据合并回一个 DataFrame
+    sorted_df = shuffled_df.sort_values(by=['forget_rate', 'review_times'], ascending=[False, True]).reset_index(
+        drop=True)
+
+    sorted_df.to_csv('./log/temp.csv')
+    return sorted_df
+
+
+def convert_DataFrame_to_word_list(df):
+    df = list(df.itertuples(index=False, name=None))
+    results = [item[0] for item in df]
+    return results
+
+
+def get_review_word_list_orderByForgetRate(cursor, today):
+    sql = ("SELECT DISTINCT words.word,words.review_times, "
+           "CASE "
+           "WHEN COALESCE(review_times, 0) = 0 THEN 1 "
+           "ELSE CAST(forget_times AS FLOAT) / review_times "
+           "END AS forget_rate "
+           "FROM relWordMeaning "
+           "JOIN words ON relWordMeaning.word = words.word "
+           "WHERE last_review_date IS NULL "
+           "OR last_review_date != %s "
+           "ORDER BY forget_rate DESC, review_times ASC;")
+    results = execute_sql(cursor, sql, today)
+    df = convert_review_word_results_to_DataFrame(results)
+    sorted_df = random_shuffle(df)
+    results = convert_DataFrame_to_word_list(sorted_df)
+    print(results)
+    return results
+
+
+def examine_start_date(cursor):
+    """
+    检查当前轮次是否完成，如果完成则更新
+    :param cursor:
+    :return:
+    """
+    config = read_config()
+    start_date = config['data']['start_date']
+    sql = "SELECT COUNT(*) FROM words WHERE last_review_date <=%s OR last_review_date IS NULL"
+    result = execute_sql(cursor, sql, start_date, False)
+    if result[0] == 0:
+        start_date = get_date()
+        config['data']['start_date'] = start_date
+        update_config(config)
+    return start_date
+
+
+def examine_if_word_reviewed_today(cursor, word, today):
+    data = execute_sql(cursor, "SELECT word, last_review_date FROM words WHERE word=%s", word, False)
+    # 如果该单词今天没有复习
+    return str(data[1]) != str(today)
+
+
+def read_last_forget_word_list(cursor, today):
+    """
+    从log中读取最后一次复习中记错的单词，并检测是否在今天复习过
+    :return:
+    """
+    latest_file = get_last_forget_words()
+    print(f"上一天记错的单词文件：{latest_file}")
+    with open(f'log/{latest_file}', 'r') as f:
+        words_from_file = [line.strip() for line in f.readlines()]
+
+    df_from_file = pd.DataFrame({
+        'word': [],
+        'review_times': [],
+        'forget_rate': []
+    })
+    # 对每一个单词进行检查
+    for word in words_from_file:
+        if examine_if_word_reviewed_today(cursor, word, today):
+            new_row = pd.DataFrame({
+                'word': [word],
+                'review_times': [0],
+                'forget_rate': [0]
+            })
+            df_from_file = pd.concat([df_from_file, new_row], ignore_index=True)
+    return df_from_file
+
+
+def get_review_word_list_ForgetAndForgetRate(cursor, today):
+    # 检查start_date
+    start_date = examine_start_date(cursor)
+    # sql的区别在于这个模式是按轮次复习，oreder by forget rate是按天复习
+    sql = ("SELECT DISTINCT words.word,words.review_times, "
+           "CASE "
+           "WHEN COALESCE(review_times, 0) = 0 THEN 1 "
+           "ELSE CAST(forget_times AS FLOAT) / review_times "
+           "END AS forget_rate "
+           "FROM relWordMeaning "
+           "JOIN words ON relWordMeaning.word = words.word "
+           "WHERE last_review_date IS NULL "
+           "OR last_review_date < %s"
+           "ORDER BY forget_rate DESC, review_times ASC;")
+    results = execute_sql(cursor, sql, start_date)
+    df = convert_review_word_results_to_DataFrame(results)
+    df = random_shuffle(df)
+    df_last_forget = read_last_forget_word_list(cursor, today)
+    print(df_last_forget)
+    print(df)
+    combined_df = pd.concat([df_last_forget, df], ignore_index=True)
+    print(combined_df)
+    return convert_DataFrame_to_word_list(combined_df)
+
+
+def get_review_word_list_todayForget(cursor, today):
+    sql = ("SELECT DISTINCT words.word "
+           "FROM relWordMeaning, words "
+           "WHERE relWordMeaning.word = words.word "
+           "AND last_review_date = %s "
+           "AND continuous_remember_count = 0")
+    results = execute_sql(cursor, sql, today)
+    cursor.execute(sql, today)
+
+    results = [item[0] for item in results]
+    random.shuffle(results)
+    return results
+
 def get_review_word_list(conn, type='all'):
     cursor = conn.cursor()
     today = get_date()
     if type == 'all':
-        sql = "SELECT DISTINCT word FROM relWordMeaning"
-        cursor.execute(sql)
-        results = cursor.fetchall()
-        results = [item[0] for item in results]
-        random.shuffle(results)
+        return get_review_word_list_all(cursor)
     elif type == 'oderByForgetRate':
-        sql = ("SELECT DISTINCT words.word,words.review_times, "
-               "CASE "
-               "WHEN COALESCE(review_times, 0) = 0 THEN 1 "
-               "ELSE CAST(forget_times AS FLOAT) / review_times "
-               "END AS forget_rate "
-               "FROM relWordMeaning "
-               "JOIN words ON relWordMeaning.word = words.word "
-               "WHERE last_review_date IS NULL "
-               "OR last_review_date != %s "
-               "ORDER BY forget_rate DESC, review_times ASC;")
-        cursor.execute(sql, today)
-        results = cursor.fetchall()
-        df = pd.DataFrame(results, columns=['word', 'review_times', 'forget_rate'])
-        df['forget_rate'] = df['forget_rate'].fillna(0)
-        df['review_times'] = df['review_times'].fillna(0)
-        np.random.seed(0)
-
-        # 对每个 forget_rate 层级随机打乱单词
-        shuffled_df = df.sample(frac=1).reset_index(drop=True)
-
-        # 将打乱的数据合并回一个 DataFrame
-        sorted_df = shuffled_df.sort_values(by=['forget_rate', 'review_times'], ascending=[False, True]).reset_index(
-            drop=True)
-
-        sorted_df.to_csv('./log/temp.csv')
-        sorted_df = list(sorted_df.itertuples(index=False, name=None))
-        results = [item[0] for item in sorted_df]
-        print(results)
+        return get_review_word_list_orderByForgetRate(cursor, today)
 
     elif type == "ForgetAndForgetRate":
         """
         1.之前复习过的暂时不再复习，只复习前一天中错误的
         2.仍然是按照错误率来排序
         """
-        today = get_date()
-        # step1. 读取某一轮开始日期：
-        with open('log/start_date.txt', 'r') as f:
-            start_date = f.readline().strip()
-            print(start_date)
-        # step2. 判断一下这一轮有没有结束
-        sql = "SELECT COUNT(*) FROM words WHERE last_review_date <=%s OR last_review_date IS NULL"
-        cursor.execute(sql, start_date)
-        result = cursor.fetchone()
-        if result[0] == 0:
-            start_date = get_date()
-        sql = ("SELECT DISTINCT words.word,words.review_times, "
-               "CASE "
-               "WHEN COALESCE(review_times, 0) = 0 THEN 1 "
-               "ELSE CAST(forget_times AS FLOAT) / review_times "
-               "END AS forget_rate "
-               "FROM relWordMeaning "
-               "JOIN words ON relWordMeaning.word = words.word "
-               "WHERE last_review_date IS NULL "
-               "OR last_review_date <%s"
-               "ORDER BY forget_rate DESC, review_times ASC;")
+        return get_review_word_list_ForgetAndForgetRate(cursor, today)
 
-        cursor.execute(sql, start_date)
-        results = cursor.fetchall()
-        df = pd.DataFrame(results, columns=['word', 'review_times', 'forget_rate'])
-        df['forget_rate'] = df['forget_rate'].fillna(0)
-        df['review_times'] = df['review_times'].fillna(0)
-        np.random.seed(0)
-
-        # 对每个 forget_rate 层级随机打乱单词
-        shuffled_df = df.sample(frac=1).reset_index(drop=True)
-
-        # 将打乱的数据合并回一个 DataFrame
-        sorted_df = shuffled_df.sort_values(by=['forget_rate', 'review_times'], ascending=[False, True]).reset_index(
-            drop=True)
-        latest_file = get_last_forget_words()
-        print(f"上一天记错的单词文件：{latest_file}")
-        with open(f'log/{latest_file}', 'r') as f:
-            words_from_file = [line.strip() for line in f.readlines()]
-
-        df_from_file = pd.DataFrame({
-            'word': [],
-            'review_times': [],
-            'forget_rate': []
-        })
-        # 对每一个单词进行检查
-        for word in words_from_file:
-            cursor.execute("SELECT word, last_review_date FROM words WHERE word=%s", word)
-            data = cursor.fetchone()
-            # 如果该单词今天没有复习
-            if str(data[1]) != str(today):
-                new_row = pd.DataFrame({
-                    'word': [word],
-                    'review_times': [0],
-                    'forget_rate': [0]
-                })
-                df_from_file = pd.concat([df_from_file, new_row], ignore_index=True)
-
-        print(df_from_file)
-        combined_df = pd.concat([df_from_file, sorted_df], ignore_index=True)
-        print(combined_df)
-        combined_df = list(combined_df.itertuples(index=False, name=None))
-        results = [item[0] for item in combined_df]
-        print(results)
-
+    elif type == "todayForget":
+        return get_review_word_list_todayForget(cursor, today)
     else:
-        today = '2023-10-07'
-        sql = ("SELECT DISTINCT words.word"
-               " FROM relWordMeaning, words "
-               "WHERE relWordMeaning.word = words.word "
-               "AND (last_review_date != %s OR last_review_date IS NULL)")
-        cursor.execute(sql, today)
-        results = cursor.fetchall()
-        results = [item[0] for item in results]
-        random.shuffle(results)
-
-    return results
+        raise Exception(f"get_review_word_list类型错误，当前类型为{type}")
 
 
 def get_today_forget_word_list(conn):
@@ -820,4 +917,3 @@ def insert_review_data(conn, word, remember):
     sql = f"INSERT INTO review_data (word,review_date_gap,review_times,continuous_remember_count,forget_times,remember,date) VALUES (%s,%s,%s,%s,%s,%s,%s)"
     cursor.execute(sql, (word, review_date_gap, result[1], result[2], result[3], remember, today))
     pass
-

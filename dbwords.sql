@@ -47,11 +47,23 @@ CREATE TABLE `relWordMeaning`  (
   PRIMARY KEY (`relWordMeaningId`)
 );
 
+CREATE TABLE `review_data`  (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `word` varchar(255) NULL,
+  `review_date_gap` int NULL,
+  `continuous_remember_count` int NULL,
+  `review_times` int NULL,
+  `forget_times` int NULL,
+  `remember` int NOT NULL,
+  PRIMARY KEY (`id`)
+);
+
 CREATE TABLE `words`  (
   `word` varchar(255) NOT NULL,
   `last_review_date` date NULL,
-  `review_times` int NULL,
-  `forget_times` int NULL,
+  `review_times` int NULL DEFAULT 0,
+  `continuous_remember_count` int NULL DEFAULT 0,
+  `forget_times` int NULL DEFAULT 0,
   PRIMARY KEY (`word`)
 );
 
@@ -68,4 +80,5 @@ ALTER TABLE `relSynonyms` ADD CONSTRAINT `fk_relSynonyms_words_1` FOREIGN KEY (`
 ALTER TABLE `relWordMeaning` ADD CONSTRAINT `fk_relWordMeaning_words_1` FOREIGN KEY (`word`) REFERENCES `words` (`word`);
 ALTER TABLE `relWordMeaning` ADD CONSTRAINT `fk_relWordMeaning_pos_1` FOREIGN KEY (`pos`) REFERENCES `pos` (`pos`);
 ALTER TABLE `relWordMeaning` ADD CONSTRAINT `fk_relWordMeaning_meanings_1` FOREIGN KEY (`meaning`) REFERENCES `meanings` (`meaning`);
+ALTER TABLE `review_data` ADD CONSTRAINT `fk_review_data_words_1` FOREIGN KEY (`word`) REFERENCES `words` (`word`);
 
